@@ -21,7 +21,7 @@ It allows other tools, scripts, or AI agents to programmatically interact with S
 
 *   Python 3.9+
 *   `uv` (recommended for package and virtual environment management) or `pip`
-*   An existing clone of the original [reptor CLI tool](https://github.com/SysReptor/reptor) (see Installation).
+*   An existing clone of the original [reptor CLI tool](https://github.com/Syslifters/reptor) (see Installation).
 
 ## Project Structure
 
@@ -122,4 +122,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgements
 
-This project would not be possible without the original [reptor CLI tool](https://github.com/SysReptor/reptor) developed by the SysReptor team and its contributors. `reptor-mcp` builds upon their excellent work to provide an MCP interface.
+This project would not be possible without the original [reptor CLI tool](https://github.com/Syslifters/reptor) developed by the SysReptor team and its contributors. `reptor-mcp` builds upon their excellent work to provide an MCP interface.
