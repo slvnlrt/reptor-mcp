@@ -56,11 +56,17 @@ def get_param_type(action: argparse.Action) -> Any:
     
     # --- 3. Handle choices (potentially creating Literal) ---
     if action.choices:
+        # If default is not in choices, fall back to str to avoid Literal mismatch
+        if (
+            action.default is not None
+            and action.default != argparse.SUPPRESS
+            and action.default not in action.choices
+        ):
+            return str
         try:
-            # typing.Literal requires Python 3.8+
             return Literal[tuple(action.choices)]
-        except (ImportError, AttributeError): # AttributeError for older typing.Literal
-            return str # Fallback
+        except (ImportError, AttributeError):
+            return str
 
     # --- 4. General type mapping if not covered above ---
     if action.type == str:
@@ -228,12 +234,16 @@ def create_tool_signature(
                 
                 annotation = Any
                 if choices:
-                    try:
-                        annotation = Literal[choices] # type: ignore
-                        if default_value is None and not primary_action.required:
-                             annotation = Union[annotation, type(None)] # type: ignore
-                    except (ImportError, AttributeError):
+                    # If default is not in choices, use str to avoid Literal mismatch
+                    if default_value is not None and default_value not in choices:
                         annotation = str
+                    else:
+                        try:
+                            annotation = Literal[choices]  # type: ignore
+                            if default_value is None and not primary_action.required:
+                                annotation = Union[annotation, type(None)]  # type: ignore
+                        except (ImportError, AttributeError):
+                            annotation = str
                 
                 param = inspect.Parameter(
                     name=param_name, kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
