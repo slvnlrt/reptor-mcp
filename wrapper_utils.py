@@ -12,7 +12,6 @@ import keyword
 from contextlib import redirect_stdout, AbstractContextManager
 from typing import Any, TYPE_CHECKING
 
-from fastmcp.server.context import Context
 from fastmcp.utilities.logging import get_logger
 from rich.table import Table as RichTable
 from rich.console import Console as RichConsole
@@ -41,7 +40,9 @@ def prepare_cli_args_for_plugin(signature: inspect.Signature, mcp_kwargs: dict) 
         if p_name in mcp_kwargs:
             cli_args[original_dest] = mcp_kwargs[p_name]
         elif p_obj.default is not inspect.Parameter.empty:
-            cli_args[original_dest] = p_obj.default
+            # Copy mutable defaults to avoid cross-call contamination
+            default = p_obj.default
+            cli_args[original_dest] = list(default) if isinstance(default, list) else default
     return cli_args
 
 
@@ -114,7 +115,6 @@ def populate_config_for_special_plugins(
     config: "ReptorConfig",
     plugin_name: str,
     cli_args: dict,
-    ctx: Context,
 ) -> bool:
     """Populate config for plugins that read args from config instead of kwargs.
 
@@ -156,30 +156,6 @@ def populate_config_for_special_plugins(
 
 
 # ---------------------------------------------------------------------------
-# Project tool special handling
-# ---------------------------------------------------------------------------
-
-async def adjust_project_tool_args(
-    plugin_name: str,
-    cli_args: dict,
-    mcp_kwargs: dict,
-    signature: inspect.Signature,
-    ctx: Context,
-) -> None:
-    """For the 'project' tool: override 'finish' default so search works."""
-    if plugin_name != "project":
-        return
-
-    finish_explicitly_passed = "finish" in mcp_kwargs
-    current_finish = cli_args.get("finish")
-    no_other_action = not cli_args.get("export") and not cli_args.get("render") and not cli_args.get("duplicate")
-
-    if not finish_explicitly_passed and current_finish is False and no_other_action:
-        await ctx.info(f"'{plugin_name}': overriding 'finish' default to None for search mode")
-        cli_args["finish"] = None
-
-
-# ---------------------------------------------------------------------------
 # Output capture
 # ---------------------------------------------------------------------------
 
@@ -204,13 +180,15 @@ class CapturingStdOut:
         self._bytes_io.flush()
 
     def getvalue(self) -> str:
+        text = self._string_io.getvalue().strip()
         if self._buffer_used and self._bytes_io.tell() > 0:
             try:
-                return self._bytes_io.getvalue().decode("utf-8").strip()
+                binary_text = self._bytes_io.getvalue().decode("utf-8").strip()
             except UnicodeDecodeError:
                 logger.warning("Could not decode captured stdout buffer as UTF-8")
-                return repr(self._bytes_io.getvalue()).strip()
-        return self._string_io.getvalue().strip()
+                binary_text = repr(self._bytes_io.getvalue()).strip()
+            return f"{text}\n{binary_text}".strip() if text else binary_text
+        return text
 
     def isatty(self):
         return False
@@ -220,7 +198,7 @@ class CapturingStdOut:
         return "utf-8"
 
 
-def execute_plugin_and_capture_output(plugin_instance: Any, plugin_name: str, ctx: Context) -> str:
+def execute_plugin_and_capture_output(plugin_instance: Any, plugin_name: str) -> str:
     """Execute a plugin's run() method and return its captured stdout as a string."""
     capture = CapturingStdOut()
     original_instance_print = None

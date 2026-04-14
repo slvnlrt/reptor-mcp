@@ -102,6 +102,7 @@ async def lifespan(app: FastMCP):
             logger.setLevel(logging.DEBUG)
 
     yield
+    _initialized = False
     logger.info("Server shutting down.")
 
 

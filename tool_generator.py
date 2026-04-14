@@ -1,10 +1,12 @@
 # tool_generator.py
 """Dynamically generates MCP tools from reptor CLI plugin argparse definitions."""
 import argparse
+import asyncio
 import inspect
 import keyword
-import logging
+import threading
 from typing import Any, TYPE_CHECKING
+from collections.abc import Callable
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -24,11 +26,14 @@ from wrapper_utils import (
     handle_stdin_redirection_and_args,
     apply_cli_config_overwrites,
     populate_config_for_special_plugins,
-    adjust_project_tool_args,
     execute_plugin_and_capture_output,
 )
 
 logger = get_logger("reptor-mcp.tool_generator")
+
+# Serialize all plugin execution to avoid thread-safety issues
+# with the shared Reptor instance, sys.stdin/stdout redirection, etc.
+_execution_lock = threading.Lock()
 
 
 class ToolGenerator:
@@ -99,7 +104,7 @@ class ToolGenerator:
 
     def _create_tool_wrapper(
         self, name: str, signature: inspect.Signature, plugin_loader_class: Any
-    ) -> callable:
+    ) -> Callable:
         """Build an async wrapper function that bridges MCP calls to a reptor plugin."""
 
         async def tool_wrapper(ctx: Context, **kwargs):
@@ -108,36 +113,42 @@ class ToolGenerator:
             # 1. Prepare CLI args from MCP kwargs and signature defaults
             cli_args = prepare_cli_args_for_plugin(signature, kwargs)
 
-            # 2. Handle stdin redirection (for plugins that consume stdin)
-            stdin_manager, cli_args = handle_stdin_redirection_and_args(name, cli_args, kwargs)
+            # 2-7: Run the blocking plugin execution in a thread with a lock
+            # to avoid blocking the event loop and to serialize access to
+            # the shared Reptor instance / sys.stdin / sys.stdout.
+            def _run_plugin():
+                with _execution_lock:
+                    # 2. Handle stdin redirection (for plugins that consume stdin)
+                    stdin_manager, final_args = handle_stdin_redirection_and_args(name, cli_args, kwargs)
 
-            with stdin_manager:
-                # 3. Apply config overwrites from synthetic parameters
-                if not self.reptor:
-                    return f"Error: Reptor instance not initialized for tool {name}."
-                apply_cli_config_overwrites(self.reptor.get_config(), name, kwargs, cli_args)
+                    with stdin_manager:
+                        # 3. Apply config overwrites from synthetic parameters
+                        if not self.reptor:
+                            return f"Error: Reptor instance not initialized for tool {name}."
+                        apply_cli_config_overwrites(self.reptor.get_config(), name, kwargs, final_args)
 
-                # 4. Log effective arguments
-                await ctx.info(f"Effective args for '{name}': {cli_args}")
+                        # 4. Special adjustments (e.g. 'project' tool finish flag)
+                        _adjust_project_tool_args_sync(name, final_args, kwargs, signature)
 
-                # 5. Special adjustments (e.g. 'project' tool finish flag)
-                await adjust_project_tool_args(name, cli_args, kwargs, signature, ctx)
+                        # 5. Instantiate the plugin
+                        try:
+                            was_special = populate_config_for_special_plugins(
+                                self.reptor.get_config(), name, final_args
+                            )
+                            if was_special:
+                                instance = plugin_loader_class(reptor=self.reptor)
+                            else:
+                                instance = plugin_loader_class(reptor=self.reptor, **final_args)
+                        except Exception as e:
+                            logger.error(f"Failed to instantiate plugin {name}: {e}", exc_info=True)
+                            return f"Error instantiating tool {name}: {e}"
 
-                # 6. Instantiate the plugin
-                try:
-                    was_special = populate_config_for_special_plugins(
-                        self.reptor.get_config(), name, cli_args, ctx
-                    )
-                    if was_special:
-                        instance = plugin_loader_class(reptor=self.reptor)
-                    else:
-                        instance = plugin_loader_class(reptor=self.reptor, **cli_args)
-                except Exception as e:
-                    logger.error(f"Failed to instantiate plugin {name}: {e}", exc_info=True)
-                    return f"Error instantiating tool {name}: {e}"
+                        # 6. Execute and capture output
+                        return execute_plugin_and_capture_output(instance, name)
 
-                # 7. Execute and capture output
-                return execute_plugin_and_capture_output(instance, name, ctx)
+            result = await asyncio.to_thread(_run_plugin)
+            await ctx.info(f"Tool '{name}' completed")
+            return result
 
         tool_wrapper.__signature__ = signature
         tool_wrapper.__annotations__ = {
@@ -146,3 +157,22 @@ class ToolGenerator:
             if p.annotation is not inspect.Parameter.empty
         }
         return tool_wrapper
+
+
+def _adjust_project_tool_args_sync(
+    plugin_name: str,
+    cli_args: dict,
+    mcp_kwargs: dict,
+    signature: inspect.Signature,
+) -> None:
+    """For the 'project' tool: override 'finish' default so search works. (sync version)"""
+    if plugin_name != "project":
+        return
+
+    finish_explicitly_passed = "finish" in mcp_kwargs
+    current_finish = cli_args.get("finish")
+    no_other_action = not cli_args.get("export") and not cli_args.get("render") and not cli_args.get("duplicate")
+
+    if not finish_explicitly_passed and current_finish is False and no_other_action:
+        logger.info(f"'{plugin_name}': overriding 'finish' default to None for search mode")
+        cli_args["finish"] = None

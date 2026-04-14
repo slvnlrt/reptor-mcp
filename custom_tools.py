@@ -6,12 +6,16 @@ These complement the dynamically-generated CLI plugin wrappers by providing
 a cleaner, structured interface for frequently-used operations like
 findings CRUD, schema discovery, and template management.
 """
+import asyncio
 import json
-import logging
 from contextlib import suppress
 from typing import Any, TYPE_CHECKING
 
-import tomli
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 from fastmcp.server.context import Context
 from fastmcp.utilities.logging import get_logger
 from reptor.models.FindingTemplate import FindingTemplate
@@ -92,6 +96,8 @@ def register_custom_tools(
 ) -> None:
     """Register all custom tools on the MCP server."""
 
+    tool_count = 0
+
     # -- list_findings -------------------------------------------------------
 
     @mcp.tool(name="list_findings")
@@ -114,11 +120,12 @@ def register_custom_tools(
             JSON array of finding summaries (id, title, status, severity, cvss).
         """
         try:
-            target = _resolve_project(reptor, project_id)
+            target = await asyncio.to_thread(_resolve_project, reptor, project_id)
             await ctx.info(f"Listing findings for project {target}")
 
+            findings = await asyncio.to_thread(reptor.api.projects.get_findings)
             results = []
-            for f in reptor.api.projects.get_findings():
+            for f in findings:
                 data = _finding_data_to_dict(f.data)
 
                 if status and (f.status or "").lower() != status.lower():
@@ -146,6 +153,8 @@ def register_custom_tools(
             logger.error(f"list_findings failed: {e}", exc_info=True)
             return f"Error: {e}"
 
+    tool_count += 1
+
     # -- get_finding_details -------------------------------------------------
 
     @mcp.tool(name="get_finding_details")
@@ -164,10 +173,10 @@ def register_custom_tools(
             JSON object with complete finding data.
         """
         try:
-            target = _resolve_project(reptor, project_id)
+            target = await asyncio.to_thread(_resolve_project, reptor, project_id)
             await ctx.info(f"Getting finding {finding_id} from project {target}")
 
-            finding = reptor.api.projects.get_finding(finding_id)
+            finding = await asyncio.to_thread(reptor.api.projects.get_finding, finding_id)
             result = finding.to_dict()
 
             if field_excluder and "data" in result:
@@ -179,6 +188,8 @@ def register_custom_tools(
         except Exception as e:
             logger.error(f"get_finding_details failed: {e}", exc_info=True)
             return f"Error: {e}"
+
+    tool_count += 1
 
     # -- get_finding_schema --------------------------------------------------
 
@@ -199,11 +210,15 @@ def register_custom_tools(
             JSON schema with project_type and finding_fields definitions.
         """
         try:
-            target = _resolve_project(reptor, project_id)
+            target = await asyncio.to_thread(_resolve_project, reptor, project_id)
             await ctx.info(f"Getting finding schema for project {target}")
 
-            project = reptor.api.projects.project
-            design = reptor.api.project_designs.get_project_design(project.project_type)
+            def _fetch_schema():
+                project = reptor.api.projects.project
+                design = reptor.api.project_designs.get_project_design(project.project_type)
+                return project, design
+
+            project, design = await asyncio.to_thread(_fetch_schema)
 
             def simplify_field(field: Any) -> dict[str, Any]:
                 field_type = field.type.value if hasattr(field.type, "value") else str(field.type)
@@ -233,6 +248,8 @@ def register_custom_tools(
             logger.error(f"get_finding_schema failed: {e}", exc_info=True)
             return f"Error: {e}"
 
+    tool_count += 1
+
     # -- create_finding ------------------------------------------------------
 
     @mcp.tool(name="create_finding")
@@ -255,7 +272,7 @@ def register_custom_tools(
             JSON object of the created finding.
         """
         try:
-            target = _resolve_project(reptor, project_id)
+            target = await asyncio.to_thread(_resolve_project, reptor, project_id)
             await ctx.info(f"Creating finding in project {target}")
 
             top_level = {"status", "assignee", "language", "template", "order"}
@@ -268,7 +285,7 @@ def register_custom_tools(
                     vuln_data[key] = value
             payload["data"] = vuln_data
 
-            finding = reptor.api.projects.create_finding(payload)
+            finding = await asyncio.to_thread(reptor.api.projects.create_finding, payload)
             result = finding.to_dict()
             if field_excluder and "data" in result:
                 result["data"] = field_excluder.exclude(result["data"])
@@ -278,6 +295,8 @@ def register_custom_tools(
         except Exception as e:
             logger.error(f"create_finding failed: {e}", exc_info=True)
             return f"Error: {e}"
+
+    tool_count += 1
 
     # -- patch_finding -------------------------------------------------------
 
@@ -304,7 +323,7 @@ def register_custom_tools(
             JSON object of the updated finding.
         """
         try:
-            target = _resolve_project(reptor, project_id)
+            target = await asyncio.to_thread(_resolve_project, reptor, project_id)
             await ctx.info(f"Patching finding {finding_id} field '{field_name}' in project {target}")
 
             top_level = {"status", "assignee", "language", "template", "order"}
@@ -313,7 +332,7 @@ def register_custom_tools(
             else:
                 payload = {"data": {field_name: field_value}}
 
-            finding = reptor.api.projects.update_finding(finding_id, payload)
+            finding = await asyncio.to_thread(reptor.api.projects.update_finding, finding_id, payload)
             result = finding.to_dict()
             if field_excluder and "data" in result:
                 result["data"] = field_excluder.exclude(result["data"])
@@ -323,6 +342,8 @@ def register_custom_tools(
         except Exception as e:
             logger.error(f"patch_finding failed: {e}", exc_info=True)
             return f"Error: {e}"
+
+    tool_count += 1
 
     # -- delete_finding ------------------------------------------------------
 
@@ -342,15 +363,17 @@ def register_custom_tools(
             Confirmation message.
         """
         try:
-            target = _resolve_project(reptor, project_id)
+            target = await asyncio.to_thread(_resolve_project, reptor, project_id)
             await ctx.info(f"Deleting finding {finding_id} from project {target}")
-            reptor.api.projects.delete_finding(finding_id)
+            await asyncio.to_thread(reptor.api.projects.delete_finding, finding_id)
             return f"Finding {finding_id} deleted successfully."
         except ValueError as e:
             return f"Error: {e}"
         except Exception as e:
             logger.error(f"delete_finding failed: {e}", exc_info=True)
             return f"Error: {e}"
+
+    tool_count += 1
 
     # -- upload_template -----------------------------------------------------
 
@@ -374,13 +397,13 @@ def register_custom_tools(
             with suppress(json.JSONDecodeError):
                 loaded = json.loads(template_data)
             if not loaded:
-                with suppress(tomli.TOMLDecodeError):
-                    loaded = tomli.loads(template_data)
+                with suppress(Exception):
+                    loaded = tomllib.loads(template_data)
             if not loaded:
                 return "Error: Could not parse template_data as JSON or TOML."
 
             template = FindingTemplate(loaded)
-            new_template = reptor.api.templates.upload_template(template)
+            new_template = await asyncio.to_thread(reptor.api.templates.upload_template, template)
             if new_template:
                 return json.dumps(new_template.to_dict(), indent=2)
             return "Error: Template upload returned no result."
@@ -388,4 +411,6 @@ def register_custom_tools(
             logger.error(f"upload_template failed: {e}", exc_info=True)
             return f"Error: {e}"
 
-    logger.info("Registered 7 custom tools")
+    tool_count += 1
+
+    logger.info(f"Registered {tool_count} custom tools")

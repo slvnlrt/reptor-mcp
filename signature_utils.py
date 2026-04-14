@@ -7,11 +7,6 @@ import inspect
 import keyword
 from typing import Any, Literal, Union # Added Union
 
-# Import from tool_config for constants needed in signature creation
-from tool_config import STDIN_CONSUMING_PLUGINS, CONFIG_OVERWRITE_PARAMS
-
-# Logger - can be configured as needed, e.g. get_logger from fastmcp
-import logging
 from fastmcp.utilities.logging import get_logger
 script_logger = get_logger("reptor-mcp.signature_utils")
 
