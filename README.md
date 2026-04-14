@@ -123,7 +123,7 @@ The exact arguments for each tool can be inspected via a connected MCP client.
 
 `reptor-mcp` acts as a dynamic wrapper around the `reptor` CLI, plus a set of direct API tools. It uses `FastMCP` to expose `reptor`'s functionalities as MCP tools.
 
-```
+```text
 mcp_server.py           # Server entry point, lifespan, configuration
 ├── tool_generator.py   # Dynamic MCP tool generation from plugin argparse definitions
 │   ├── signature_utils.py  # argparse → Python function signature translation

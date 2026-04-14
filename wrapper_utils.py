@@ -128,14 +128,13 @@ def populate_config_for_special_plugins(
 
     for arg_name, arg_value in cli_args.items():
         if plugin_name == "file" and arg_name == "file" and isinstance(arg_value, list):
-            # Open file handles for the file plugin
-            # NOTE: these file handles are passed to the plugin which is responsible for closing them
+            # Open file handles in binary mode (matches reptor's argparse.FileType('rb'))
+            # NOTE: caller should close these in a finally block after plugin execution
             opened_files: list[Any] = []
             for filepath_str in arg_value:
                 try:
-                    opened_files.append(open(filepath_str, "r"))
+                    opened_files.append(open(filepath_str, "rb"))
                 except OSError as e:
-                    # Clean up already-opened files on failure
                     for f in opened_files:
                         f.close()
                     opened_files = []

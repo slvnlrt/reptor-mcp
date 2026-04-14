@@ -123,18 +123,24 @@ class ToolGenerator:
 
                     with stdin_manager:
                         # 3. Apply config overwrites from synthetic parameters
-                        if not self.reptor:
-                            return f"Error: Reptor instance not initialized for tool {name}."
+                        assert self.reptor, "Reptor instance must be set in __init__"
                         apply_cli_config_overwrites(self.reptor.get_config(), name, kwargs, final_args)
 
                         # 4. Special adjustments (e.g. 'project' tool finish flag)
                         _adjust_project_tool_args_sync(name, final_args, kwargs, signature)
 
                         # 5. Instantiate the plugin
+                        opened_files = []
                         try:
                             was_special = populate_config_for_special_plugins(
                                 self.reptor.get_config(), name, final_args
                             )
+                            # Track any file handles opened by config population for cleanup
+                            cli_config = self.reptor.get_config().get_cli_overwrite()
+                            file_arg = cli_config.get("file", [])
+                            if isinstance(file_arg, list):
+                                opened_files = [f for f in file_arg if hasattr(f, "close")]
+
                             if was_special:
                                 instance = plugin_loader_class(reptor=self.reptor)
                             else:
@@ -144,7 +150,14 @@ class ToolGenerator:
                             return f"Error instantiating tool {name}: {e}"
 
                         # 6. Execute and capture output
-                        return execute_plugin_and_capture_output(instance, name)
+                        try:
+                            return execute_plugin_and_capture_output(instance, name)
+                        finally:
+                            for f in opened_files:
+                                try:
+                                    f.close()
+                                except Exception:
+                                    pass
 
             result = await asyncio.to_thread(_run_plugin)
             await ctx.info(f"Tool '{name}' completed")

@@ -351,20 +351,24 @@ def register_custom_tools(
     async def delete_finding(
         ctx: Context,
         finding_id: str,
+        confirm: bool = False,
         project_id: str | None = None,
     ) -> str:
-        """Deletes a finding by its ID.
+        """Deletes a finding by its ID. This operation is irreversible.
 
         Args:
             finding_id: UUID of the finding to delete.
+            confirm: Must be set to True to proceed. Prevents accidental deletion.
             project_id: Override the configured project ID.
 
         Returns:
             Confirmation message.
         """
+        if not confirm:
+            return f"Deletion not confirmed. Set confirm=True to delete finding {finding_id}."
         try:
             target = await asyncio.to_thread(_resolve_project, reptor, project_id)
-            await ctx.info(f"Deleting finding {finding_id} from project {target}")
+            await ctx.info(f"Deleting finding {finding_id} from project {target} (confirmed)")
             await asyncio.to_thread(reptor.api.projects.delete_finding, finding_id)
             return f"Finding {finding_id} deleted successfully."
         except ValueError as e:
@@ -397,7 +401,7 @@ def register_custom_tools(
             with suppress(json.JSONDecodeError):
                 loaded = json.loads(template_data)
             if not loaded:
-                with suppress(Exception):
+                with suppress(tomllib.TOMLDecodeError):
                     loaded = tomllib.loads(template_data)
             if not loaded:
                 return "Error: Could not parse template_data as JSON or TOML."

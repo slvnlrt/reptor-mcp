@@ -78,6 +78,9 @@ def _create_field_excluder() -> FieldExcluder | None:
 async def lifespan(app: FastMCP):
     global _initialized
     if not _initialized:
+        if os.environ.get("REPTOR_MCP_DEBUG", "false").lower() == "true":
+            logger.setLevel(logging.DEBUG)
+
         logger.info("Initializing reptor-mcp server...")
 
         reptor = _create_reptor_instance()
@@ -97,9 +100,6 @@ async def lifespan(app: FastMCP):
 
         _initialized = True
         logger.info("Server ready.")
-
-        if os.environ.get("REPTOR_MCP_DEBUG", "false").lower() == "true":
-            logger.setLevel(logging.DEBUG)
 
     yield
     _initialized = False

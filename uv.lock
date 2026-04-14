@@ -1247,7 +1247,7 @@ wheels = [
 [[package]]
 name = "reptor-mcp"
 version = "0.2.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "reptor" },
@@ -1261,7 +1261,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp", specifier = ">=3.0" },
+    { name = "fastmcp", specifier = ">=3.0,<4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "reptor", specifier = ">=0.34" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },

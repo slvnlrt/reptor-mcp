@@ -5,9 +5,13 @@ description = "MCP Server exposing reptor CLI plugins for SysReptor pentest repo
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "fastmcp>=3.0",
+    "fastmcp>=3.0,<4.0",
     "reptor>=0.34",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 dev = [
