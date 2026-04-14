@@ -4,11 +4,14 @@ This project transforms the `reptor` CLI tool into an MCP (Model-Context-Protoco
 
 It allows other tools, scripts, or AI agents to programmatically interact with SysReptor via the MCP protocol, facilitating integration into automated workflows.
 
-## Important Warnings
+> [!WARNING]
+> **Alpha Software:** The underlying `reptor` CLI tool is in alpha. Its API may change, potentially breaking `reptor-mcp`.
 
-*   **Alpha Software Stability:** The underlying `reptor` CLI tool is currently in an alpha stage of development. This means its API and functionalities might change, potentially leading to breaking changes in `reptor-mcp`. While `reptor-mcp` aims for stability, its functionality is dependent on `reptor`.
-*   **No MCP Server Authentication:** The `reptor-mcp` server currently **does not implement any authentication or authorization mechanisms**. It is designed for local use. **DO NOT EXPOSE THE MCP SERVER DIRECTLY TO THE INTERNET OR UNTRUSTED NETWORKS.**
-*   **Data Sensitivity with LLMs:** If you are using `reptor`, SysReptor, and consequently `reptor-mcp` with sensitive project data, carefully consider the implications of sending this data to Large Language Models (LLMs) or any third-party services via clients connected to this MCP server. Use the `REPTOR_MCP_EXCLUDE_FIELDS` environment variable to strip sensitive fields before they reach the LLM.
+> [!CAUTION]
+> **No Authentication:** This server has **no authentication or authorization**. It is designed for local use only. **DO NOT EXPOSE IT TO THE INTERNET OR UNTRUSTED NETWORKS.**
+
+> [!IMPORTANT]
+> **Data Sensitivity:** If you handle sensitive project data, consider the implications of sending it to LLMs via this server. Use `REPTOR_MCP_EXCLUDE_FIELDS` to strip sensitive fields before they reach the LLM.
 
 ## Features
 
@@ -16,38 +19,36 @@ It allows other tools, scripts, or AI agents to programmatically interact with S
 *   **Direct API Tools:** Provides structured tools for findings CRUD, schema discovery, and template management using reptor's Python API directly.
 *   **Field Exclusion:** Strips sensitive fields from data before returning it to LLM clients (configurable via environment variable).
 *   **Async-Safe:** Non-blocking event loop with thread-safe serialized plugin execution.
-*   **Complex Argument Handling:** Manages `stdin` redirection, configuration overwrites, and special file types.
 
 ## Prerequisites
 
 *   Python 3.10+
 *   `uv` (recommended) or `pip`
+*   A running [SysReptor](https://github.com/Syslifters/sysreptor) instance with an API token
 
 ## Installation
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/slvnlrt/reptor-mcp.git
-    cd reptor-mcp
-    ```
+```bash
+git clone https://github.com/slvnlrt/reptor-mcp.git
+cd reptor-mcp
+uv venv && source .venv/bin/activate
+uv pip install -e .
+```
 
-2.  **Create and activate virtual environment:**
-    ```bash
-    uv venv
-    source .venv/bin/activate  # Linux/macOS
-    # .\.venv\Scripts\Activate.ps1  # Windows PowerShell
-    ```
+This installs `reptor` and `fastmcp` automatically from PyPI. No need to clone the reptor repository separately.
 
-3.  **Install dependencies:**
-    ```bash
-    uv pip install -e .
-    ```
+<details>
+<summary>Development setup (local reptor clone)</summary>
 
-    For development from a local reptor clone (sibling directory), set the `REPTOR_MAIN_PATH` environment variable instead:
-    ```bash
-    uv pip install -e ../reptor-main
-    uv pip install -e .
-    ```
+If you need to work against a local checkout of reptor (e.g. to test unreleased changes):
+
+```bash
+uv pip install -e /path/to/reptor-source
+uv pip install -e .
+```
+
+Alternatively, set `REPTOR_MAIN_PATH=/path/to/reptor-source` at runtime to inject it into `sys.path`.
+</details>
 
 ## Configuration
 
@@ -62,7 +63,6 @@ The server is configured via environment variables:
 | `REQUESTS_CA_BUNDLE` | No | Path to a custom CA bundle file |
 | `REPTOR_MCP_EXCLUDE_FIELDS` | No | Comma-separated field names to strip from LLM responses (e.g. `internal_notes,api_token`) |
 | `REPTOR_MCP_DEBUG` | No | Set to `true` for verbose debug logging |
-| `REPTOR_MAIN_PATH` | No | Path to a local reptor source directory (dev mode) |
 
 ## Running the Server
 
@@ -100,12 +100,12 @@ These tools use reptor's Python API directly for structured, schema-aware operat
 | `get_finding_schema` | Discovers available finding fields, types, and constraints for a project. Call before `create_finding` or `patch_finding`. |
 | `create_finding` | Creates a new finding from a flat data dict. |
 | `patch_finding` | Updates a single field on a finding. |
-| `delete_finding` | Deletes a finding by ID. |
+| `delete_finding` | Deletes a finding by ID (requires explicit confirmation). |
 | `upload_template` | Uploads a finding template from JSON or TOML. |
 
 ### Plugin Tools (Dynamic Wrappers)
 
-The server dynamically wraps all `reptor` CLI plugins as MCP tools. These include:
+The server dynamically wraps all `reptor` CLI plugins as MCP tools:
 
 | Category | Tools |
 |---|---|
@@ -119,9 +119,22 @@ The server dynamically wraps all `reptor` CLI plugins as MCP tools. These includ
 
 The exact arguments for each tool can be inspected via a connected MCP client.
 
-## Architecture Overview
+## Relationship to reptor's Native MCP Server
 
-`reptor-mcp` acts as a dynamic wrapper around the `reptor` CLI, plus a set of direct API tools. It uses `FastMCP` to expose `reptor`'s functionalities as MCP tools.
+Since reptor v0.33, reptor includes its own built-in MCP server (`reptor mcp`). The two servers are **complementary**:
+
+| Capability | reptor-mcp | Native `reptor mcp` |
+|---|---|---|
+| Findings CRUD | :white_check_mark: | :white_check_mark: |
+| Finding schema discovery | :white_check_mark: | :white_check_mark: |
+| Report sections CRUD | :x: | :white_check_mark: |
+| Vulnerability importers (nmap, nessus, burp, etc.) | :white_check_mark: | :x: |
+| Project management (search, create, export, duplicate) | :white_check_mark: | :x: |
+| Notes, files, translation | :white_check_mark: | :x: |
+| Templates management | :white_check_mark: | :white_check_mark: |
+| Field exclusion | :white_check_mark: | :white_check_mark: |
+
+## Architecture
 
 ```text
 mcp_server.py           # Server entry point, lifespan, configuration
@@ -136,21 +149,6 @@ Key design decisions:
 *   **Plugin wrappers** run in threads with a serialization lock, keeping the async event loop responsive while protecting shared state.
 *   **Custom tools** use `asyncio.to_thread()` for non-blocking API calls.
 *   **Field exclusion** recursively strips specified fields from all nested data structures before returning to the client.
-
-## Relationship to reptor's Native MCP Server
-
-Since reptor v0.33, reptor includes its own built-in MCP server (`reptor mcp`). The two servers are **complementary**:
-
-| Capability | reptor-mcp | Native `reptor mcp` |
-|---|---|---|
-| Findings CRUD | Yes | Yes |
-| Finding schema discovery | Yes | Yes |
-| Report sections CRUD | No | Yes |
-| Vulnerability importers (nmap, nessus, burp, etc.) | **Yes** | No |
-| Project management (search, create, export, duplicate) | **Yes** | No |
-| Notes, files, translation | **Yes** | No |
-| Templates management | Yes | Yes |
-| Field exclusion | Yes | Yes |
 
 ## License
 
