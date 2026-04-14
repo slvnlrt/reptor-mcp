@@ -1,102 +1,121 @@
 # mcp_server.py
+"""
+reptor-mcp: MCP Server exposing reptor CLI plugins for SysReptor automation.
+
+Creates and configures the FastMCP application.  The server dynamically
+generates MCP tools from all reptor CLI plugins and registers custom
+direct-API tools for common operations (findings CRUD, schema, templates).
+
+Usage:
+    fastmcp run mcp_server.py:mcp --transport streamable-http --port 8008
+"""
 import io
-import sys
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 
-# --- Dynamic Path Loading for Reptor ---
-REPTOR_PATH = os.environ.get("REPTOR_MAIN_PATH")
-if REPTOR_PATH and os.path.isdir(REPTOR_PATH):
-    sys.path.insert(0, REPTOR_PATH)
-    print(f"INFO: Added {REPTOR_PATH} to sys.path for Reptor library.")
-# --- End Dynamic Path Loading ---
-
 from fastmcp import FastMCP
-from reptor.lib.reptor import Reptor
 from fastmcp.utilities.logging import get_logger
+from reptor.lib.reptor import Reptor
 
+from custom_tools import FieldExcluder, register_custom_tools
 from tool_generator import ToolGenerator
 
-script_logger = get_logger("reptor-mcp.mcp_server")
-script_logger.setLevel(logging.INFO)
+logger = get_logger("reptor-mcp")
 
-reptor_instance = None
-_server_initialized = False
+# --- Optional: dev-mode path for local reptor source ---
+_reptor_dev_path = os.environ.get("REPTOR_MAIN_PATH")
+if _reptor_dev_path and os.path.isdir(_reptor_dev_path):
+    sys.path.insert(0, _reptor_dev_path)
+    logger.info(f"Dev mode: added {_reptor_dev_path} to sys.path")
 
-async def initialize_server_logic(app: FastMCP):
-    global reptor_instance, _server_initialized
-    
-    if _server_initialized:
-        script_logger.info("Server initialization already performed. Skipping lifespan startup logic.")
-        return
+_initialized = False
 
-    _server_initialized = True
-    script_logger.info("Lifespan startup: Running one-time server initialization logic (first time)...")
 
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    original_stdin = sys.stdin
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _create_reptor_instance() -> Reptor:
+    """Create a Reptor instance with suppressed startup output."""
+    saved = sys.stdout, sys.stderr, sys.stdin
     sys.stdout = io.StringIO()
     sys.stderr = io.StringIO()
-    sys.stdin = io.TextIOWrapper(io.BytesIO(b''), encoding='utf-8')
-
+    sys.stdin = io.TextIOWrapper(io.BytesIO(b""), encoding="utf-8")
     try:
-        reptor_instance = Reptor()
+        return Reptor()
     finally:
-        sys.stdout = original_stdout
-        captured_stderr_content = ""
-        if isinstance(sys.stderr, io.StringIO):
-            captured_stderr_content = sys.stderr.getvalue()
-        sys.stderr = original_stderr
-        sys.stdin = original_stdin
-        if captured_stderr_content and os.environ.get('REPTOR_MCP_DEBUG', 'false').lower() == 'true':
-            script_logger.debug("--- Captured Stderr During Shielded Block ---")
-            script_logger.debug(captured_stderr_content.strip())
-            script_logger.debug("--- End Captured Stderr ---")
+        sys.stdout, sys.stderr, sys.stdin = saved
 
-    if reptor_instance is None:
-        raise RuntimeError("Reptor instance could not be initialized.")
 
-    config = reptor_instance.get_config()
-    if os.environ.get('REPTOR_MCP_INSECURE', 'false').lower() == 'true':
+def _configure_ssl(config) -> None:
+    """Apply SSL/TLS settings from environment variables."""
+    if os.environ.get("REPTOR_MCP_INSECURE", "false").lower() == "true":
         config.set("insecure", True)
     else:
-        ca_bundle_path = os.environ.get('REQUESTS_CA_BUNDLE')
-        if ca_bundle_path:
-            config.set("requests_ca_bundle", ca_bundle_path)
-            config.set("insecure", False) 
-        else:
-            config.set("insecure", False)
+        ca_bundle = os.environ.get("REQUESTS_CA_BUNDLE")
+        if ca_bundle:
+            config.set("requests_ca_bundle", ca_bundle)
+        config.set("insecure", False)
 
-    reptor_instance.plugin_manager.run_loading_sequence()
-    reptor_instance.plugin_manager.load_plugins()
 
-    generator = ToolGenerator(mcp_server=app, reptor_instance=reptor_instance)
-    generator.generate_tools()
-    script_logger.info("Lifespan startup: One-time server initialization logic complete.")
+def _create_field_excluder() -> FieldExcluder | None:
+    """Create a FieldExcluder from REPTOR_MCP_EXCLUDE_FIELDS env var."""
+    raw = os.environ.get("REPTOR_MCP_EXCLUDE_FIELDS", "")
+    fields = [f.strip() for f in raw.split(",") if f.strip()]
+    if fields:
+        logger.info(f"Field exclusion enabled for: {fields}")
+        return FieldExcluder(fields)
+    return None
 
-    if os.environ.get('REPTOR_MCP_DEBUG', 'false').lower() == 'true':
-        script_logger.setLevel(logging.DEBUG)
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
 
 @asynccontextmanager
-async def lifespan_manager(app: FastMCP):
-    script_logger.info(f"Lifespan: Startup sequence initiated for app: {app.name}")
-    await initialize_server_logic(app)
+async def lifespan(app: FastMCP):
+    global _initialized
+    if not _initialized:
+        if os.environ.get("REPTOR_MCP_DEBUG", "false").lower() == "true":
+            logger.setLevel(logging.DEBUG)
+
+        logger.info("Initializing reptor-mcp server...")
+
+        reptor = _create_reptor_instance()
+        _configure_ssl(reptor.get_config())
+
+        reptor.plugin_manager.run_loading_sequence()
+        reptor.plugin_manager.load_plugins()
+
+        field_excluder = _create_field_excluder()
+
+        # Dynamic wrappers for all CLI plugins
+        generator = ToolGenerator(mcp_server=app, reptor_instance=reptor)
+        generator.generate_tools()
+
+        # Custom tools using direct reptor API
+        register_custom_tools(app, reptor, field_excluder)
+
+        _initialized = True
+        logger.info("Server ready.")
+
     yield
-    script_logger.info(f"Lifespan: Shutdown sequence initiated for app: {app.name}")
+    _initialized = False
+    logger.info("Server shutting down.")
 
-def create_app() -> FastMCP:
-    script_logger.info("Creating FastMCP application instance...")
-    
-    mcp_app = FastMCP(
-        name="reptor-mcp",
-        instructions="An MCP server to interact with the Reptor CLI.",
-        lifespan=lifespan_manager
-    )
-    script_logger.info(f"FastMCP application instance '{mcp_app.name}' created.")
-    return mcp_app
 
-# Create the application instance using the factory.
-# This 'mcp' object is what 'fastmcp run mcp_server.py:mcp' will discover and run.
-mcp = create_app()
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+
+mcp = FastMCP(
+    name="reptor-mcp",
+    instructions=(
+        "MCP server for SysReptor pentest reporting. Exposes reptor CLI plugins "
+        "as tools (nmap, nessus, burp, zap, sslyze, etc.) and provides direct "
+        "API tools for findings CRUD, schema discovery, and template management."
+    ),
+    lifespan=lifespan,
+)

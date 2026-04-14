@@ -1,0 +1,27 @@
+[project]
+name = "reptor-mcp"
+version = "0.2.0"
+description = "MCP Server exposing reptor CLI plugins for SysReptor pentest reporting automation"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "fastmcp>=3.0,<4.0",
+    "reptor>=0.34",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
